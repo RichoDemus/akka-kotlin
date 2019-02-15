@@ -17,25 +17,17 @@ fun main() {
     val summer = actorSystem.actorOf(SumActor.props, "Summer")
     val overlord = actorSystem.actorOf(Overlord.props, "Overlord")
 
-//    actorSystem.log().info("Sending Hello Kotlin")
-//    actorRef.tell("Hello Kotlin", ActorRef.noSender())
-//    actorRef.tell(PoisonPill.getInstance(), ActorRef.noSender())
-
     summer.tell(SumActor.Sum(1, 3), ActorRef.noSender())
-
-//    val workDone = actorSystem.whenTerminated()
-//
-//    do {
-//        println("Waiting for the process to finish")
-//        Thread.sleep(60000L)
-//    } while (!workDone.isCompleted)
 
     println(getActorTree(actorSystem))
     Thread.sleep(1000L)
     ask(overlord, Overlord.GetActors(), Duration.ofSeconds(1))
             .thenAccept {
                 if(it is Overlord.Actors) {
-                    println("actors: $it")
+                    println("Actors:")
+                    it.actors.forEach { actor ->
+                        println("\tactor: $actor ")
+                    }
                 }
             }.toCompletableFuture().join()
 
@@ -43,27 +35,24 @@ fun main() {
     Thread.sleep(10000L)
     ask(overlord, Overlord.GetActors(), Duration.ofSeconds(1))
             .thenAccept {
-                println("actors: $it")
-            }
+                if(it is Overlord.Actors) {
+                    println("Actors:")
+                    it.actors.forEach { actor ->
+                        println("\tactor: $actor ")
+                    }
+                }
+            }.toCompletableFuture().join()
 
     println(getActorTree(actorSystem))
 
     Thread.sleep(20000)
     actorSystem.terminate()
-
 }
 
 private fun getActorTree(actorSystem: ActorSystem): String {
     val method = actorSystem::class.java.getDeclaredMethod("printTree")
     method.isAccessible = true
-    val r = method.invoke(actorSystem)
-    return r as String
-}
-
-fun printTree(it: List<ActorRef>): String {
-//    it.first().
-    return ""
-
+    return method.invoke(actorSystem) as String
 }
 
 class LoggingActor : AbstractLoggingActor() {
@@ -84,7 +73,7 @@ class LoggingActor : AbstractLoggingActor() {
 
 
     override fun postStop() {
-        println("Logger stoped")
+        context.actorSelection("/user/Overlord").tell(Overlord.UnRegister(self), self)
     }
 }
 
@@ -109,6 +98,9 @@ class SumActor : AbstractActor() {
                 .build()
     }
 
+    override fun postStop() {
+        context.actorSelection("/user/Overlord").tell(Overlord.UnRegister(self), self)
+    }
 }
 
 class Overlord : AbstractActor() {
@@ -117,17 +109,21 @@ class Overlord : AbstractActor() {
     }
 
     class GetActors
-    data class Actors(val actors: List<ActorRef>)
+    data class Actors(val actors: Set<ActorRef>)
     data class Register(val ref: ActorRef)
+    data class UnRegister(val ref: ActorRef)
 
-    private val actors = mutableListOf<ActorRef>()
+    private val actors = mutableSetOf<ActorRef>(self)
 
     override fun createReceive(): Receive {
-        val logger = context.actorOf(LoggingActor.props)
+        val logger = context.actorOf(LoggingActor.props, "logger")
         return ReceiveBuilder()
                 .match(Register::class.java) {
                     actors += it.ref
                     logger.tell(LoggingActor.LogMessage("Added actor ${it.ref}"), self)
+                }
+                .match(UnRegister::class.java) {
+                    actors -= it.ref
                 }
                 .match(GetActors::class.java) {
                     sender.tell(Actors(actors), self)
